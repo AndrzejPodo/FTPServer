@@ -11,18 +11,23 @@
 #include <pthread.h>
 
 #define MAX_CLIENTS 10
-#define SERVER_PORT 8086
+#define SERVER_PORT_MIN 8080
+#define DATA_PORT_MIN 10000
 
 void *ClientHandler(void *socket_desc);
 char *getFilenameFromRequest(char *request);
 bool sendFileOverSocket(int socket_desc, char *file_name);
-int sendResponse(int sockfd, const char* response);
+int sendResponse(int sockfd, const char *response);
+
+uint16_t DATA_PORT = DATA_PORT_MIN;
+uint16_t SERVER_PORT = SERVER_PORT_MIN;
 
 typedef struct
 {
 	int id;
 	char name[30];
-	int socket;
+	int socket; // do tego socketa piszesz responsy do zapytan
+	int data_socket; // do tego socketa piszesz dane, np. wynik LS
 	pthread_t thread;
 } Client;
 
@@ -47,13 +52,12 @@ int main(int argc, char **argv)
 
 	server.sin_family = AF_INET;
 	server.sin_addr.s_addr = INADDR_ANY;
-	server.sin_port = htons(SERVER_PORT);
 
-	if (bind(socket_desc, (struct sockaddr *)&server, sizeof(server)) < 0)
+	do
 	{
-		perror("Bind failed");
-		return 1;
-	}
+		server.sin_port = htons(SERVER_PORT);
+		SERVER_PORT += 1;
+	} while (bind(socket_desc, (struct sockaddr *)&server, sizeof(server)) < 0);
 
 	listen(socket_desc, 3);
 
@@ -86,13 +90,16 @@ int main(int argc, char **argv)
 	return 0;
 }
 
-void* ClientHandler(void *cli)
+void *ClientHandler(void *cli)
 {
+	struct sockaddr_in data_addr, data_client_addr;
+	int data_socket, data_socket_cli;
+	int c = sizeof(struct sockaddr_in);
 
 	Client client = *(Client *)cli;
 	//TODO: zastanowic sie nad rozmiarami buforow
 	char client_request[BUFSIZ], client_response[BUFSIZ];
-	
+
 	//po otwarciu połączenia wysyłamy do klienta powitanie
 	sendResponse(client.socket, "220 (Welcome to STM32F4 FTP Server!) \r\n");
 
@@ -106,33 +113,63 @@ void* ClientHandler(void *cli)
 		request_token = strtok(client_request, " \r\n");
 		printf("%s\n", client_request);
 		// obsluga komendy USER
-		if (strcmp(request_token, "USER") == 0) {
+		if (strcmp(request_token, "USER") == 0)
+		{
 			request_token = strtok(NULL, " \r\n");
-			if(request_token != NULL) {
+			if (request_token != NULL)
+			{
 				printf("%s\n", request_token);
 				strcpy(client.name, request_token);
 				sprintf(client_response, "230 (Hi %s!) \r\n", request_token);
-				sendResponse(client.socket, client_response);				
+				sendResponse(client.socket, client_response);
 			}
+		}
+		// obsluga komendy PASV
+		if (strcmp(request_token, "PASV") == 0)
+		{
+			//trzeba otworzyc socket na porcie randomowym od 10k do 11k
+			data_socket = socket(AF_INET, SOCK_STREAM, 0);
+			data_addr.sin_family = AF_INET;
+			inet_pton(AF_INET, "127.0.0.1", &(data_addr.sin_addr));
+			//bierzemy DATA_PORT a potem inkrementujemy o jeden
+			do
+			{
+				data_addr.sin_port = htons(DATA_PORT);
+				DATA_PORT += 1;
+			} while (bind(data_socket, (struct sockaddr *)&data_addr, sizeof(data_addr)) < 0);
+
+			//wyciagamy z data_addr poszczegolne bajty
+			uint32_t ip_addr = ntohl(data_addr.sin_addr.s_addr);
+			uint16_t port = ntohs(data_addr.sin_port);
+			uint8_t b1 = (ip_addr >> 24), b2 = (ip_addr >> 16) % 256, b3 = (ip_addr >> 8) % 256, b4 = ip_addr % 256, b5 = port >> 8, b6 = port % 256;
+			sprintf(client_response, "227 Entering Passive Mode (%d,%d,%d,%d,%d,%d).\r\n", b1, b2, b3, b4, b5, b6);
+			sendResponse(client.socket, client_response);
+
+			//czekamy na połaczenie na portcie danych
+			listen(data_socket, 3);
+			printf("Waiting for data connection \n");
+			client.data_socket = accept(data_socket, (struct sockaddr *)&data_client_addr, (socklen_t *)&c);
+			printf("Data connection established\n");
 		}
 
 		// obsluga komendy QUIT
-		if (strcmp(request_token, "QUIT") == 0){
+		if (strcmp(request_token, "QUIT") == 0)
+		{
 			sprintf(client_response, "221 (Goodbye %s!) \r\n", client.name);
 			sendResponse(client.socket, client_response);
 			close(client.socket);
 
-			int* res = malloc(1*sizeof(int));
+			int *res = malloc(1 * sizeof(int));
 			*res = 0;
-			return (void*) res;
+			return (void *)res;
 		}
 	}
 }
 
-int sendResponse(int sockfd, const char* response){
+int sendResponse(int sockfd, const char *response)
+{
 	return send(sockfd, response, strlen(response), 0);
 }
-
 
 // te funkcja jest stara i moze nie miec sensu
 char *GetFilenameFromRequest(char *request)
