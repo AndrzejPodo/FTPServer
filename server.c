@@ -26,7 +26,7 @@ typedef struct
 {
 	int id;
 	char name[30];
-	int socket; // do tego socketa piszesz responsy do zapytan
+	int socket;		 // do tego socketa piszesz responsy do zapytan
 	int data_socket; // do tego socketa piszesz dane, np. wynik LS
 	pthread_t thread;
 } Client;
@@ -107,7 +107,11 @@ void *ClientHandler(void *cli)
 	//w petli odbieramy requesty od klienta
 	while (1)
 	{
-		recv(client.socket, client_request, BUFSIZ, 0);
+		int receivedBytes = recv(client.socket, client_request, BUFSIZ, 0);
+		if (receivedBytes >= 0 && receivedBytes < BUFSIZ - 1)
+		{
+			client_request[receivedBytes] = 0;
+		}
 		// analizujemy request token po tokenie
 		// odcinamy pierwszą część (RETR, PASV, USER itp.)
 		request_token = strtok(client_request, " \r\n");
@@ -167,43 +171,67 @@ void *ClientHandler(void *cli)
 		//obsluga komendy LIST
 		if (strcmp(request_token, "LIST") == 0)
 		{
-			sprintf(client_response, "150 Opening ASCII mode data connection for /bin/ls. \r\n"); // czy to jest dobra odpowiedz ??
-			sendResponse(client.socket, client_response);
-			request_token = strtok(NULL, " \r\n");
-			if (request_token == NULL)
+			if (client.data_socket > 0)
 			{
-			   char cwd[256];
-   			   getcwd(cwd, sizeof(cwd));
-			   request_token = &cwd[0];
-			}
-			DIR *dir = opendir(request_token);
-			if (dir == NULL) 
-			{
-				printf("Wrong directory\n"); // tu chyba cos innego ma odpowiadac ale nie wiem co
-				sprintf(client_response, "Wrong directory \r\n");
-				sendResponse(client.data_socket, client_response);
+				sendResponse(client.socket, "150 Here comes the directory listing. \r\n");
+				request_token = strtok(NULL, " \r\n");
+				if (request_token == NULL)
+				{
+					char cwd[256];
+					getcwd(cwd, sizeof(cwd));
+					request_token = &cwd[0];
+				}
+				DIR *dir = opendir(request_token);
+				char path[256];
+				struct stat buf;
+				struct tm *t;
+				char timebuff[80];
+				time_t time;
+				if (dir != NULL)
+				{
+					struct dirent *file;
+					while ((file = readdir(dir)))
+					{
+						if ((strcmp(file->d_name, ".") != 0) && (strcmp(file->d_name, "..") != 0))
+						{
+							strcpy(path, request_token);
+							strcat(path, "/");
+							strcat(path, file->d_name);
+							if (stat(path, &buf) != -1)
+							{
+								time = buf.st_mtime;
+								t = localtime(&time);
+								strftime(timebuff, 80, "%b %d %H:%M", t);
+								sprintf(client_response, "%c%s %5d %4d %4d %8d %s %s \r\n",
+										file->d_type == DT_DIR ? 'd' : '-',
+										S_ISDIR(buf.st_mode) ? "rwxr-xr-x" : "rw-r--r--",
+										buf.st_nlink,
+										buf.st_uid,
+										buf.st_gid,
+										buf.st_size,
+										timebuff,
+										file->d_name);
+								sendResponse(client.data_socket, client_response);
+							}
+						}
+					}
+					closedir(dir);
+					sendResponse(client.socket, "226 Listing completed. \r\n");
+					client.data_socket = -1;
+					close(client.data_socket);
+					printf("Listing completed.\n");
+				}
+				else
+				{
+					sendResponse(client.socket, "550 Failed to open directory. \r\n");
+				}
 			}
 			else
 			{
-				struct dirent *file;
-				while ((file = readdir(dir))){
-					if((strcmp(file->d_name, ".") != 0) && (strcmp(file->d_name, "..") != 0))
-					{
-						sprintf(client_response,  "%s \r\n", file->d_name);
-						sendResponse(client.data_socket, client_response);
-					}					
-				}
-				closedir(dir);
-				sprintf(client_response, "226 Listing completed. \r\n"); // czy to jest dobra odpowiedz ??
-				sendResponse(client.socket, client_response);
-				printf("Listing completed.\n");
+				sendResponse(client.socket, "425 Use PORT or PASV first. \r\n");
 			}
 		}
-
-		memset(client_request, 0, BUFSIZ); // trzeba czyscic za kazdym razem
-		
 	}
-			
 }
 int sendResponse(int sockfd, const char *response)
 {
