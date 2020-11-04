@@ -2,13 +2,13 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/sendfile.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <pthread.h>
+#include <dirent.h>
 
 #define MAX_CLIENTS 10
 #define SERVER_PORT_MIN 8080
@@ -63,7 +63,7 @@ int main(int argc, char **argv)
 
 	int clientCounter = 0;
 	printf("Waiting for client\n");
-	while (socket_client = accept(socket_desc, (struct sockaddr *)&client, (socklen_t *)&c))
+	while ((socket_client = accept(socket_desc, (struct sockaddr *)&client, (socklen_t *)&c)) > 0)
 	{
 		//uruchamiamy nowy wątek który będzie obsługiwał klienta
 		pthread_t client_thread;
@@ -163,36 +163,49 @@ void *ClientHandler(void *cli)
 			*res = 0;
 			return (void *)res;
 		}
-	}
-}
 
+		//obsluga komendy LIST
+		if (strcmp(request_token, "LIST") == 0)
+		{
+			sprintf(client_response, "150 Opening ASCII mode data connection for /bin/ls. \r\n"); // czy to jest dobra odpowiedz ??
+			sendResponse(client.socket, client_response);
+			request_token = strtok(NULL, " \r\n");
+			if (request_token == NULL)
+			{
+			   char cwd[256];
+   			   getcwd(cwd, sizeof(cwd));
+			   request_token = &cwd[0];
+			}
+			DIR *dir = opendir(request_token);
+			if (dir == NULL) 
+			{
+				printf("Wrong directory\n"); // tu chyba cos innego ma odpowiadac ale nie wiem co
+				sprintf(client_response, "Wrong directory \r\n");
+				sendResponse(client.data_socket, client_response);
+			}
+			else
+			{
+				struct dirent *file;
+				while ((file = readdir(dir))){
+					if((strcmp(file->d_name, ".") != 0) && (strcmp(file->d_name, "..") != 0))
+					{
+						sprintf(client_response,  "%s \r\n", file->d_name);
+						sendResponse(client.data_socket, client_response);
+					}					
+				}
+				closedir(dir);
+				sprintf(client_response, "226 Listing completed. \r\n"); // czy to jest dobra odpowiedz ??
+				sendResponse(client.socket, client_response);
+				printf("Listing completed.\n");
+			}
+		}
+
+		memset(client_request, 0, BUFSIZ); // trzeba czyscic za kazdym razem
+		
+	}
+			
+}
 int sendResponse(int sockfd, const char *response)
 {
 	return send(sockfd, response, strlen(response), 0);
-}
-
-// te funkcja jest stara i moze nie miec sensu
-char *GetFilenameFromRequest(char *request)
-{
-	printf("\n");
-	char *file_name = strchr(request, ' ');
-	printf("%s", file_name);
-	return file_name + 1;
-}
-
-// te funkcja jest stara i moze nie miec sensu
-bool SendFileOverSocket(int socket_desc, char *file_name)
-{
-
-	struct stat obj;
-	int file_desc,
-		file_size;
-
-	stat(file_name, &obj);
-	file_desc = open(file_name, O_RDONLY);
-	file_size = obj.st_size;
-	send(socket_desc, &file_size, sizeof(int), 0);
-	sendfile(socket_desc, file_desc, NULL, file_size);
-
-	return true;
 }
