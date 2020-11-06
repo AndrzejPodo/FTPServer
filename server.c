@@ -230,6 +230,43 @@ void *ClientHandler(void *cli)
 			{
 				sendResponse(client.socket, "425 Use PORT or PASV first. \r\n");
 			}
+			memset(client_response, 0, BUFSIZ);
+		}
+
+		if (strcmp(request_token, "RETR") == 0)
+		{
+			if (client.data_socket > 0)
+			{
+				request_token = strtok(NULL, " \r\n");
+				int size;
+				char buf[BUFSIZ] = {0};
+				FILE *file = fopen(request_token, "r");
+				if (file == NULL)
+				{
+					sendResponse(client.socket, "550 Requested action not taken. File unavailable.\n");
+				}
+
+				else
+				{
+					sendResponse(client.socket, "150 Here comes the file retreiving. \r\n");
+					while ((size = fread(buf, sizeof(char), BUFSIZ, file)) > 0)
+					{
+						buf[size] = '\0';
+						sendResponse(client.data_socket, buf);
+					}
+
+					sendResponse(client.socket, "226 Retreiving completed. \r\n");
+					fclose(file);
+					client.data_socket = -1;
+					close(client.data_socket);
+					printf("Retreiving completed.\n");
+				}
+			}
+
+			else
+			{
+				sendResponse(client.socket, "425 Use PORT or PASV first. \r\n");
+			}
 		}
 	}
 }
