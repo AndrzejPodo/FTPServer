@@ -168,7 +168,14 @@ void *ClientHandler(void *cli)
 			*res = 0;
 			return (void *)res;
 		}
+		// tymczasowa obsluga SYST zeby clinet ftp zadzialal
+		if (strcmp(request_token, "SYST") == 0){
+			sendResponse(client.socket, "215 UNIX Type: L8\r\n");
+		}
 
+		if (strcmp(request_token, "TYPE") == 0){
+			sendResponse(client.socket, "200 \r\n");
+		}
 		//obsluga komendy LIST
 		if (strcmp(request_token, "LIST") == 0)
 		{
@@ -192,7 +199,7 @@ void *ClientHandler(void *cli)
 				{
 					struct dirent *file;
 					while ((file = readdir(dir)))
-					{
+					{	
 						if ((strcmp(file->d_name, ".") != 0) && (strcmp(file->d_name, "..") != 0))
 						{
 							strcpy(path, request_token);
