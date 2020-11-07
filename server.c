@@ -167,7 +167,14 @@ void *ClientHandler(void *cli)
 			*res = 0;
 			return (void *)res;
 		}
+		// tymczasowa obsluga SYST zeby clinet ftp zadzialal
+		if (strcmp(request_token, "SYST") == 0){
+			sendResponse(client.socket, "215 UNIX Type: L8\r\n");
+		}
 
+		if (strcmp(request_token, "TYPE") == 0){
+			sendResponse(client.socket, "200 \r\n");
+		}
 		//obsluga komendy LIST
 		if (strcmp(request_token, "LIST") == 0)
 		{
@@ -191,7 +198,7 @@ void *ClientHandler(void *cli)
 				{
 					struct dirent *file;
 					while ((file = readdir(dir)))
-					{
+					{	
 						if ((strcmp(file->d_name, ".") != 0) && (strcmp(file->d_name, "..") != 0))
 						{
 							strcpy(path, request_token);
@@ -202,7 +209,7 @@ void *ClientHandler(void *cli)
 								time = buf.st_mtime;
 								t = localtime(&time);
 								strftime(timebuff, 80, "%b %d %H:%M", t);
-								sprintf(client_response, "%c%s %5d %4d %4d %8d %s %s \r\n",
+								sprintf(client_response, "%c%s %5ld %4d %4d %8ld %s %s \r\n",
 										file->d_type == DT_DIR ? 'd' : '-',
 										S_ISDIR(buf.st_mode) ? "rwxr-xr-x" : "rw-r--r--",
 										buf.st_nlink,
@@ -217,8 +224,8 @@ void *ClientHandler(void *cli)
 					}
 					closedir(dir);
 					sendResponse(client.socket, "226 Listing completed. \r\n");
-					client.data_socket = -1;
 					close(client.data_socket);
+					client.data_socket = -1;
 					printf("Listing completed.\n");
 				}
 				else
@@ -256,8 +263,8 @@ void *ClientHandler(void *cli)
 
 					sendResponse(client.socket, "226 Retreiving completed. \r\n");
 					fclose(file);
-					client.data_socket = -1;
 					close(client.data_socket);
+					client.data_socket = -1;
 					printf("Retreiving completed.\n");
 				}
 			}
