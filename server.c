@@ -97,6 +97,7 @@ void *ClientHandler(void *cli)
 	int c = sizeof(struct sockaddr_in);
 
 	Client client = *(Client *)cli;
+	client.data_socket = -1;
 	//TODO: zastanowic sie nad rozmiarami buforow
 	char client_request[BUFSIZ], client_response[BUFSIZ];
 
@@ -209,7 +210,7 @@ void *ClientHandler(void *cli)
 								time = buf.st_mtime;
 								t = localtime(&time);
 								strftime(timebuff, 80, "%b %d %H:%M", t);
-								sprintf(client_response, "%c%s %5ld %4d %4d %8ld %s %s \r\n",
+								sprintf(client_response, "%c%s %5d %4d %4d %8ld %s %s \r\n",
 										file->d_type == DT_DIR ? 'd' : '-',
 										S_ISDIR(buf.st_mode) ? "rwxr-xr-x" : "rw-r--r--",
 										buf.st_nlink,
@@ -257,15 +258,15 @@ void *ClientHandler(void *cli)
 					sendResponse(client.socket, "150 Here comes the file retreiving. \r\n");
 					while ((size = fread(buf, sizeof(char), BUFSIZ, file)) > 0)
 					{
-						buf[size] = '\0';
+						buf[size-1] = '\0';
 						sendResponse(client.data_socket, buf);
 					}
 
-					sendResponse(client.socket, "226 Retreiving completed. \r\n");
+					sendResponse(client.socket, "226 Sending completed. \r\n");
 					fclose(file);
 					close(client.data_socket);
 					client.data_socket = -1;
-					printf("Retreiving completed.\n");
+					printf("Sending completed.\n");
 				}
 			}
 
