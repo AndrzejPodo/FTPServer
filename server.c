@@ -2,13 +2,13 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/sendfile.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <pthread.h>
+#include <dirent.h>
 
 #define MAX_CLIENTS 10
 #define SERVER_PORT_MIN 8080
@@ -26,7 +26,7 @@ typedef struct
 {
 	int id;
 	char name[30];
-	int socket; // do tego socketa piszesz responsy do zapytan
+	int socket;		 // do tego socketa piszesz responsy do zapytan
 	int data_socket; // do tego socketa piszesz dane, np. wynik LS
 	pthread_t thread;
 } Client;
@@ -63,7 +63,7 @@ int main(int argc, char **argv)
 
 	int clientCounter = 0;
 	printf("Waiting for client\n");
-	while (socket_client = accept(socket_desc, (struct sockaddr *)&client, (socklen_t *)&c))
+	while ((socket_client = accept(socket_desc, (struct sockaddr *)&client, (socklen_t *)&c)) > 0)
 	{
 		//uruchamiamy nowy wątek który będzie obsługiwał klienta
 		pthread_t client_thread;
@@ -97,6 +97,7 @@ void *ClientHandler(void *cli)
 	int c = sizeof(struct sockaddr_in);
 
 	Client client = *(Client *)cli;
+	client.data_socket = -1;
 	//TODO: zastanowic sie nad rozmiarami buforow
 	char client_request[BUFSIZ], client_response[BUFSIZ];
 
@@ -107,7 +108,11 @@ void *ClientHandler(void *cli)
 	//w petli odbieramy requesty od klienta
 	while (1)
 	{
-		recv(client.socket, client_request, BUFSIZ, 0);
+		int receivedBytes = recv(client.socket, client_request, BUFSIZ, 0);
+		if (receivedBytes >= 0 && receivedBytes < BUFSIZ - 1)
+		{
+			client_request[receivedBytes] = 0;
+		}
 		// analizujemy request token po tokenie
 		// odcinamy pierwszą część (RETR, PASV, USER itp.)
 		request_token = strtok(client_request, " \r\n");
@@ -163,36 +168,116 @@ void *ClientHandler(void *cli)
 			*res = 0;
 			return (void *)res;
 		}
+		// tymczasowa obsluga SYST zeby clinet ftp zadzialal
+		if (strcmp(request_token, "SYST") == 0){
+			sendResponse(client.socket, "215 UNIX Type: L8\r\n");
+		}
+
+		if (strcmp(request_token, "TYPE") == 0){
+			sendResponse(client.socket, "200 \r\n");
+		}
+		//obsluga komendy LIST
+		if (strcmp(request_token, "LIST") == 0)
+		{
+			if (client.data_socket > 0)
+			{
+				sendResponse(client.socket, "150 Here comes the directory listing. \r\n");
+				request_token = strtok(NULL, " \r\n");
+				if (request_token == NULL)
+				{
+					char cwd[256];
+					getcwd(cwd, sizeof(cwd));
+					request_token = &cwd[0];
+				}
+				DIR *dir = opendir(request_token);
+				char path[256];
+				struct stat buf;
+				struct tm *t;
+				char timebuff[80];
+				time_t time;
+				if (dir != NULL)
+				{
+					struct dirent *file;
+					while ((file = readdir(dir)))
+					{	
+						if ((strcmp(file->d_name, ".") != 0) && (strcmp(file->d_name, "..") != 0))
+						{
+							strcpy(path, request_token);
+							strcat(path, "/");
+							strcat(path, file->d_name);
+							if (stat(path, &buf) != -1)
+							{
+								time = buf.st_mtime;
+								t = localtime(&time);
+								strftime(timebuff, 80, "%b %d %H:%M", t);
+								sprintf(client_response, "%c%s %5d %4d %4d %8ld %s %s \r\n",
+										file->d_type == DT_DIR ? 'd' : '-',
+										S_ISDIR(buf.st_mode) ? "rwxr-xr-x" : "rw-r--r--",
+										buf.st_nlink,
+										buf.st_uid,
+										buf.st_gid,
+										buf.st_size,
+										timebuff,
+										file->d_name);
+								sendResponse(client.data_socket, client_response);
+							}
+						}
+					}
+					closedir(dir);
+					sendResponse(client.socket, "226 Listing completed. \r\n");
+					close(client.data_socket);
+					client.data_socket = -1;
+					printf("Listing completed.\n");
+				}
+				else
+				{
+					sendResponse(client.socket, "550 Failed to open directory. \r\n");
+				}
+			}
+			else
+			{
+				sendResponse(client.socket, "425 Use PORT or PASV first. \r\n");
+			}
+		}
+
+		if (strcmp(request_token, "RETR") == 0)
+		{
+			if (client.data_socket > 0)
+			{
+				request_token = strtok(NULL, " \r\n");
+				int size;
+				char buf[BUFSIZ] = {0};
+				FILE *file = fopen(request_token, "r");
+				if (file == NULL)
+				{
+					sendResponse(client.socket, "550 Requested action not taken. File unavailable.\n");
+				}
+
+				else
+				{
+					sendResponse(client.socket, "150 Here comes the file retreiving. \r\n");
+					while ((size = fread(buf, sizeof(char), BUFSIZ, file)) > 0)
+					{
+						buf[size-1] = '\0';
+						sendResponse(client.data_socket, buf);
+					}
+
+					sendResponse(client.socket, "226 Sending completed. \r\n");
+					fclose(file);
+					close(client.data_socket);
+					client.data_socket = -1;
+					printf("Sending completed.\n");
+				}
+			}
+
+			else
+			{
+				sendResponse(client.socket, "425 Use PORT or PASV first. \r\n");
+			}
+		}
 	}
 }
-
 int sendResponse(int sockfd, const char *response)
 {
 	return send(sockfd, response, strlen(response), 0);
-}
-
-// te funkcja jest stara i moze nie miec sensu
-char *GetFilenameFromRequest(char *request)
-{
-	printf("\n");
-	char *file_name = strchr(request, ' ');
-	printf("%s", file_name);
-	return file_name + 1;
-}
-
-// te funkcja jest stara i moze nie miec sensu
-bool SendFileOverSocket(int socket_desc, char *file_name)
-{
-
-	struct stat obj;
-	int file_desc,
-		file_size;
-
-	stat(file_name, &obj);
-	file_desc = open(file_name, O_RDONLY);
-	file_size = obj.st_size;
-	send(socket_desc, &file_size, sizeof(int), 0);
-	sendfile(socket_desc, file_desc, NULL, file_size);
-
-	return true;
 }
