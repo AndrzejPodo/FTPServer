@@ -18,6 +18,7 @@ void *ClientHandler(void *socket_desc);
 char *getFilenameFromRequest(char *request);
 bool sendFileOverSocket(int socket_desc, char *file_name);
 int sendResponse(int sockfd, const char *response);
+int sendData(int sockfd, char *response, int size);
 
 uint16_t DATA_PORT = DATA_PORT_MIN;
 uint16_t SERVER_PORT = SERVER_PORT_MIN;
@@ -247,7 +248,7 @@ void *ClientHandler(void *cli)
 				request_token = strtok(NULL, " \r\n");
 				int size;
 				char buf[BUFSIZ] = {0};
-				FILE *file = fopen(request_token, "r");
+				FILE *file = fopen(request_token, "rb");
 				if (file == NULL)
 				{
 					sendResponse(client.socket, "550 Requested action not taken. File unavailable.\n");
@@ -258,8 +259,7 @@ void *ClientHandler(void *cli)
 					sendResponse(client.socket, "150 Here comes the file retreiving. \r\n");
 					while ((size = fread(buf, sizeof(char), BUFSIZ, file)) > 0)
 					{
-						buf[size-1] = '\0';
-						sendResponse(client.data_socket, buf);
+						sendData(client.data_socket, buf, size);
 					}
 
 					sendResponse(client.socket, "226 Sending completed. \r\n");
@@ -278,6 +278,21 @@ void *ClientHandler(void *cli)
 	}
 }
 int sendResponse(int sockfd, const char *response)
-{
+{	
 	return send(sockfd, response, strlen(response), 0);
+}
+
+int sendData(int sockfd, char *response, int size){
+	int bytesSent = 0;
+	int total = 0;
+	while(size > 0) {
+		bytesSent = send(sockfd, response, size, 0);
+		if(bytesSent < 0){
+			return -1;
+		}
+		size -= bytesSent;
+		response += bytesSent;
+		total += bytesSent;
+	}
+	return total;
 }
