@@ -9,16 +9,18 @@
 #include <stdbool.h>
 #include <pthread.h>
 #include <dirent.h>
+#include <ifaddrs.h>
 
 #define MAX_CLIENTS 10
 #define SERVER_PORT_MIN 8080
-#define DATA_PORT_MIN 10000
+#define DATA_PORT_MIN 8000
 
 void *ClientHandler(void *socket_desc);
 char *getFilenameFromRequest(char *request);
 bool sendFileOverSocket(int socket_desc, char *file_name);
 int sendResponse(int sockfd, const char *response);
 int sendData(int sockfd, char *response, int size);
+in_addr_t getIpAddres();
 
 uint16_t DATA_PORT = DATA_PORT_MIN;
 uint16_t SERVER_PORT = SERVER_PORT_MIN;
@@ -36,6 +38,8 @@ Client clients[MAX_CLIENTS];
 
 int main(int argc, char **argv)
 {
+
+	printf("%d\n", getIpAddres("wlan0"));
 	int socket_desc,
 		socket_client,
 		*new_sock,
@@ -147,9 +151,13 @@ void *ClientHandler(void *cli)
 		if (strcmp(request_token, "PASV") == 0)
 		{
 			//trzeba otworzyc socket na porcie randomowym od 10k do 11k
+			struct ifaddrs *ifAddrStruct = NULL;
+			struct ifaddrs *ifa = NULL;
+			getifaddrs(&ifAddrStruct);
+
 			data_socket = socket(AF_INET, SOCK_STREAM, 0);
 			data_addr.sin_family = AF_INET;
-			inet_pton(AF_INET, "127.0.0.1", &(data_addr.sin_addr));
+			data_addr.sin_addr.s_addr = getIpAddres("wlan0");
 			//bierzemy DATA_PORT a potem inkrementujemy o jeden
 			do
 			{
@@ -201,8 +209,6 @@ void *ClientHandler(void *cli)
 			}
 		}
 
-
-
 		// obsluga komendy QUIT
 		if (strcmp(request_token, "QUIT") == 0)
 		{
@@ -242,7 +248,7 @@ void *ClientHandler(void *cli)
 				sendResponse(client.socket, "150 Here comes the directory listing. \r\n");
 
 				getcwd(cwd, sizeof(cwd));
-			
+
 				DIR *dir = opendir(cwd);
 				char path[256];
 				struct stat buf;
@@ -253,9 +259,9 @@ void *ClientHandler(void *cli)
 				{
 					struct dirent *file;
 					while ((file = readdir(dir)) != NULL)
-					{	
+					{
 						if ((strcmp(file->d_name, ".") != 0) && (strcmp(file->d_name, "..") != 0))
-						{	
+						{
 							strcpy(path, cwd);
 							strcat(path, "/");
 							strcat(path, file->d_name);
@@ -302,11 +308,14 @@ void *ClientHandler(void *cli)
 			sprintf(client_response, "211-Features:\n EPRT\n EPSV \n PASV \n REST STREAM \n SIZE \n TVFS \n211 End \r\n");
 			sendResponse(client.socket, client_response);
 		}
-		
-		if (strcmp(request_token, "MDTM") == 0) {
-			while(request_token != NULL){
+
+		if (strcmp(request_token, "MDTM") == 0)
+		{
+			while (request_token != NULL)
+			{
 				request_token = strtok(NULL, " \r\n");
-				if(request_token != NULL) printf("%s \n", request_token);
+				if (request_token != NULL)
+					printf("%s \n", request_token);
 			}
 			sendResponse(client.socket, "550 Could not get file modification time.");
 		}
@@ -369,4 +378,26 @@ int sendData(int sockfd, char *response, int size)
 		total += bytesSent;
 	}
 	return total;
+}
+
+in_addr_t getIpAddres(const char *name)
+{
+	struct ifaddrs *addrs, *tmp;
+	getifaddrs(&addrs);
+	tmp = addrs;
+
+	while (tmp)
+	{
+		if (tmp->ifa_addr && tmp->ifa_addr->sa_family == AF_INET && strcmp(tmp->ifa_name, name) == 0)
+		{
+			struct sockaddr_in *pAddr = (struct sockaddr_in *)tmp->ifa_addr;
+			freeifaddrs(addrs);
+			return pAddr->sin_addr.s_addr;
+		}
+
+		tmp = tmp->ifa_next;
+	}
+
+	freeifaddrs(addrs);
+	return 0;
 }
