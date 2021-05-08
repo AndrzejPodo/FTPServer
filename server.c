@@ -96,6 +96,7 @@ void *ClientHandler(void *cli)
 	struct sockaddr_in data_addr, data_client_addr;
 	int data_socket, data_socket_cli;
 	int c = sizeof(struct sockaddr_in);
+	char cwd[1024];
 
 	Client client = *(Client *)cli;
 	client.data_socket = -1;
@@ -118,6 +119,7 @@ void *ClientHandler(void *cli)
 		// odcinamy pierwszą część (RETR, PASV, USER itp.)
 		request_token = strtok(client_request, " \r\n");
 		printf("%s\n", client_request);
+
 		// obsluga komendy USER
 		if (strcmp(request_token, "USER") == 0)
 		{
@@ -130,6 +132,17 @@ void *ClientHandler(void *cli)
 				sendResponse(client.socket, client_response);
 			}
 		}
+
+		// obsluga AUTH
+		if (strcmp(request_token, "AUTH") == 0)
+		{
+			request_token = strtok(NULL, " \r\n");
+			if (request_token != NULL)
+			{
+				sendResponse(client.socket, "530 Please login with USER and PASS \r\n");
+			}
+		}
+
 		// obsluga komendy PASV
 		if (strcmp(request_token, "PASV") == 0)
 		{
@@ -158,6 +171,38 @@ void *ClientHandler(void *cli)
 			printf("Data connection established\n");
 		}
 
+		// obsluga komendy CWD
+		if (strcmp(request_token, "CWD") == 0)
+		{
+			request_token = strtok(NULL, " \r\n");
+			if (request_token != NULL)
+			{
+				if (chdir(request_token) == 0)
+				{
+					sendResponse(client.socket, "250 Directory successfully changed. \r\n");
+				}
+				else
+				{
+					sendResponse(client.socket, "550 Failed to change directory. \r\n");
+				}
+			}
+		}
+
+		// obsluga komendy CDUP
+		if (strcmp(request_token, "CDUP") == 0)
+		{
+			if (chdir("..") == 0)
+			{
+				sendResponse(client.socket, "250 Directory successfully changed. \r\n");
+			}
+			else
+			{
+				sendResponse(client.socket, "550 Failed to change directory. \r\n");
+			}
+		}
+
+
+
 		// obsluga komendy QUIT
 		if (strcmp(request_token, "QUIT") == 0)
 		{
@@ -169,28 +214,36 @@ void *ClientHandler(void *cli)
 			*res = 0;
 			return (void *)res;
 		}
-		// tymczasowa obsluga SYST zeby clinet ftp zadzialal
-		if (strcmp(request_token, "SYST") == 0){
+		// tymczasowa obsluga SYST zeby filezilla dzialala
+		if (strcmp(request_token, "SYST") == 0)
+		{
 			sendResponse(client.socket, "215 UNIX Type: L8\r\n");
 		}
 
-		if (strcmp(request_token, "TYPE") == 0){
+		// tymczasowa obsluga TYPE zeby filezilla dzialala
+		if (strcmp(request_token, "TYPE") == 0)
+		{
 			sendResponse(client.socket, "200 \r\n");
 		}
-		//obsluga komendy LIST
+
+		// obsluga komenda PWD
+		if (strcmp(request_token, "PWD") == 0)
+		{
+			getcwd(cwd, sizeof(cwd));
+			sprintf(client_response, "257 \"%s\" \r\n", cwd);
+			sendResponse(client.socket, client_response);
+		}
+		// obsluga komendy LIST
 		if (strcmp(request_token, "LIST") == 0)
 		{
 			if (client.data_socket > 0)
 			{
+				char cwd[256];
 				sendResponse(client.socket, "150 Here comes the directory listing. \r\n");
-				request_token = strtok(NULL, " \r\n");
-				if (request_token == NULL)
-				{
-					char cwd[256];
-					getcwd(cwd, sizeof(cwd));
-					request_token = &cwd[0];
-				}
-				DIR *dir = opendir(request_token);
+
+				getcwd(cwd, sizeof(cwd));
+			
+				DIR *dir = opendir(cwd);
 				char path[256];
 				struct stat buf;
 				struct tm *t;
@@ -199,31 +252,33 @@ void *ClientHandler(void *cli)
 				if (dir != NULL)
 				{
 					struct dirent *file;
-					while ((file = readdir(dir)))
+					while ((file = readdir(dir)) != NULL)
 					{	
 						if ((strcmp(file->d_name, ".") != 0) && (strcmp(file->d_name, "..") != 0))
-						{
-							strcpy(path, request_token);
+						{	
+							strcpy(path, cwd);
 							strcat(path, "/");
 							strcat(path, file->d_name);
+
 							if (stat(path, &buf) != -1)
 							{
 								time = buf.st_mtime;
 								t = localtime(&time);
 								strftime(timebuff, 80, "%b %d %H:%M", t);
-								sprintf(client_response, "%c%s %5d %4d %4d %8ld %s %s \r\n",
+								sprintf(client_response, "%c%s %5d %4d %4d %8ld %s \r\n",
 										file->d_type == DT_DIR ? 'd' : '-',
 										S_ISDIR(buf.st_mode) ? "rwxr-xr-x" : "rw-r--r--",
 										buf.st_nlink,
 										buf.st_uid,
 										buf.st_gid,
 										buf.st_size,
-										timebuff,
 										file->d_name);
+								printf(client_response);
 								sendResponse(client.data_socket, client_response);
 							}
 						}
 					}
+
 					closedir(dir);
 					sendResponse(client.socket, "226 Listing completed. \r\n");
 					close(client.data_socket);
@@ -241,6 +296,22 @@ void *ClientHandler(void *cli)
 			}
 		}
 
+		// tymczasowa obsluga komendy FEAT
+		if (strcmp(request_token, "FEAT") == 0)
+		{
+			sprintf(client_response, "211-Features:\n EPRT\n EPSV \n PASV \n REST STREAM \n SIZE \n TVFS \n211 End \r\n");
+			sendResponse(client.socket, client_response);
+		}
+		
+		if (strcmp(request_token, "MDTM") == 0) {
+			while(request_token != NULL){
+				request_token = strtok(NULL, " \r\n");
+				if(request_token != NULL) printf("%s \n", request_token);
+			}
+			sendResponse(client.socket, "550 Could not get file modification time.");
+		}
+
+		// obsluga komendy RETR
 		if (strcmp(request_token, "RETR") == 0)
 		{
 			if (client.data_socket > 0)
@@ -278,16 +349,19 @@ void *ClientHandler(void *cli)
 	}
 }
 int sendResponse(int sockfd, const char *response)
-{	
+{
 	return send(sockfd, response, strlen(response), 0);
 }
 
-int sendData(int sockfd, char *response, int size){
+int sendData(int sockfd, char *response, int size)
+{
 	int bytesSent = 0;
 	int total = 0;
-	while(size > 0) {
+	while (size > 0)
+	{
 		bytesSent = send(sockfd, response, size, 0);
-		if(bytesSent < 0){
+		if (bytesSent < 0)
+		{
 			return -1;
 		}
 		size -= bytesSent;
