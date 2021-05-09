@@ -10,11 +10,14 @@
 #include <pthread.h>
 #include <dirent.h>
 #include <ifaddrs.h>
+#include "temperature_controller.h"
+#include <time.h>
 
 #define MAX_CLIENTS 10
 #define SERVER_PORT_MIN 8080
 #define DATA_PORT_MIN 8000
 
+void *ServerThread(void *args);
 void *ClientHandler(void *socket_desc);
 char *getFilenameFromRequest(char *request);
 bool sendFileOverSocket(int socket_desc, char *file_name);
@@ -36,10 +39,47 @@ typedef struct
 
 Client clients[MAX_CLIENTS];
 
+void printIpAddress(in_addr_t addr)
+{
+	uint8_t b1 = (addr >> 24), b2 = (addr >> 16) % 256, b3 = (addr >> 8) % 256, b4 = addr % 256;
+	printf("Server address is: %d.%d.%d.%d\n", b4, b3, b2, b1);
+}
+
 int main(int argc, char **argv)
 {
+	printIpAddress(getIpAddres("wlan0"));
 
-	printf("%d\n", getIpAddres("wlan0"));
+	pthread_t server_thread, temperature_controller;
+
+	pthread_create(&server_thread, NULL, ServerThread, NULL);
+	pthread_create(&temperature_controller, NULL, temperatureControllerThread, NULL);
+
+	void *ret;
+	if (pthread_join(temperature_controller, &ret))
+	{
+		perror("pthread_create() error");
+		exit(3);
+	}
+
+	int controller_status = *((int *)ret);
+
+	printf("Server temperature excited '%d'. Shutting down\n", controller_status);
+
+	FILE *fp = fopen("logs.txt", "a");
+
+	time_t rawtime;
+	struct tm *timeinfo;
+
+	time(&rawtime);
+	timeinfo = localtime(&rawtime);
+
+	fprintf(fp, "-----------------------\n %s Temperature excited with value: %d\n", asctime(timeinfo), controller_status);
+	
+	return 0;
+}
+
+void *ServerThread(void *args)
+{
 	int socket_desc,
 		socket_client,
 		*new_sock,
@@ -89,10 +129,7 @@ int main(int argc, char **argv)
 	if (socket_client < 0)
 	{
 		perror("Accept failed");
-		return 1;
 	}
-
-	return 0;
 }
 
 void *ClientHandler(void *cli)
